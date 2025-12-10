@@ -1,0 +1,174 @@
+﻿AppType=StandardJava
+Build1=Default,b4j.example
+Group=Default Group
+Library1=javaobject
+Library2=jcore
+Library3=json
+Library4=jsql
+NumberOfFiles=0
+NumberOfLibraries=4
+NumberOfModules=0
+Version=10.3
+@EndOfDesignText@
+'Non-UI application (console / server application)
+#Region Project Attributes 
+	#CommandLineArgs:
+	#MergeLibraries: True
+#End Region
+#AdditionalJar: sqlite-jdbc-3.7.2
+#Macro: Title, Open Console, ide://run?file=%COMSPEC%&Args=/c&Args=start&Args=run.bat
+
+Sub Process_Globals
+    Private sql As SQL
+	Private sys As JavaObject
+	Private in As InputStream
+	Private out As OutputStream
+	Private reader As TextReader
+End Sub
+
+Sub AppStart (Args() As String)
+    ' 1. Initialize Database
+    InitDatabase
+    
+    ' 2. Initialize Standard Streams
+   	sys.InitializeStatic("java.lang.System")
+	in = sys.GetField("in")
+	out = sys.GetField("out")
+   	reader.Initialize(in)
+   
+    ' 3. Start the Listener Loop
+    Start
+End Sub
+
+' Helper to log to a file instead of StdOut so we don't break the protocol
+Sub WriteDebug (Message As String)
+	' Since MCP reads the standard output for data, do not use Log() for debugging!
+	' It will corrupt the JSON stream. Write debug logs to a text file or StdErr instead.
+	If File.Exists(File.DirApp, "debug_log.txt") = False Then File.WriteString(File.DirApp, "debug_log.txt", "")
+    File.WriteString(File.DirApp, "debug_log.txt", File.ReadString(File.DirApp, "debug_log.txt") & CRLF & Message)
+End Sub
+
+Sub InitDatabase
+    If File.Exists(File.DirApp, "inventory.db") = False Then
+        sql.InitializeSQLite(File.DirApp, "inventory.db", True)
+        sql.ExecNonQuery("CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, stock INTEGER, price REAL)")
+        sql.ExecNonQuery("INSERT INTO products (name, stock, price) VALUES ('Wireless Mouse', 50, 25.00)")
+        sql.ExecNonQuery("INSERT INTO products (name, stock, price) VALUES ('Mechanical Keyboard', 10, 120.00)")
+        sql.ExecNonQuery("INSERT INTO products (name, stock, price) VALUES ('USB-C Cable', 100, 5.50)")
+    Else
+        sql.InitializeSQLite(File.DirApp, "inventory.db", True)
+    End If
+End Sub
+
+' This simulates an event loop listening to StdIn
+Sub Start
+	Try
+		Do While True
+			Dim line As String = reader.ReadLine
+			WriteDebug("RECEIVED: " & line)
+			If line <> "" Then
+				HandleMessage(line)
+			Else
+				Exit
+			End If
+		Loop
+	Catch
+		WriteDebug("Error reading input: " & LastException)
+	End Try
+	StartMessageLoop
+End Sub
+
+Sub HandleMessage (jsonStr As String)
+    Try
+        Dim map As Map = jsonStr.As(JSON).ToMap
+        Dim method As String = map.Get("method")
+        Dim id As Object = map.Get("id") ' ID can be string or int
+        
+        Select method
+            Case "initialize"
+                SendResponse(id, CreateMap("protocolVersion": "2024-11-05", _
+                    "capabilities": CreateMap("tools": CreateMap()), _
+                    "serverInfo": CreateMap("name": "B4J Inventory MCP", "version": "1.0")))
+                    
+            Case "notifications/initialized"
+                ' Client confirming connection, no response needed usually
+                LogDebug("Client initialized.")
+                
+            Case "tools/list"
+                ' Define the tools we expose to the AI
+                Dim tools As List
+                tools.Initialize
+                
+                ' Tool 1: Get Inventory
+                Dim tool1 As Map = CreateMap("name": "get_inventory", "description": "Get list of all products and stock levels", "inputSchema": CreateMap("type": "object", "properties": CreateMap(), "required": Array()))
+                tools.Add(tool1)
+                
+                ' Tool 2: Add Item (Example of args)
+                Dim argsMap As Map = CreateMap("name": CreateMap("type": "string"), "stock": CreateMap("type": "integer"))
+                Dim tool2 As Map = CreateMap("name": "add_product", "description": "Add new product", "inputSchema": CreateMap("type": "object", "properties": argsMap))
+                tools.Add(tool2)
+                
+                SendResponse(id, CreateMap("tools": tools))
+                
+            Case "tools/call"
+                Dim params As Map = map.Get("params")
+                Dim toolName As String = params.Get("name")
+                Dim args As Map = params.Get("arguments")
+                
+                If toolName = "get_inventory" Then
+                    Dim res As List = ExecuteQuery("SELECT * FROM products")
+                    SendResponse(id, CreateMap("content": Array(CreateMap("type": "text", "text": res.As(JSON).ToCompactString))))
+                Else If toolName = "add_product" Then
+                    sql.ExecNonQuery2("INSERT INTO products (name, stock) VALUES (?, ?)", Array As Object(args.Get("name"), args.Get("stock")))
+                    SendResponse(id, CreateMap("content": Array(CreateMap("type": "text", "text": "Product added successfully."))))
+                Else
+                    SendError(id, -32601, "Tool not found")
+                End If
+                
+            Case "ping"
+                SendResponse(id, CreateMap())
+                
+            Case Else
+               ' Ignore unknown notifications
+        End Select
+        
+    Catch
+        LogDebug("Error processing message: " & LastException)
+    End Try
+End Sub
+
+Sub ExecuteQuery (Query As String) As List
+    Dim res As List
+    res.Initialize
+    Dim rs As ResultSet = sql.ExecQuery(Query)
+    Do While rs.NextRow
+        Dim row As Map
+        row.Initialize
+        For i = 0 To rs.ColumnCount - 1
+            row.Put(rs.GetColumnName(i), rs.GetString2(i))
+        Next
+        res.Add(row)
+    Loop
+    rs.Close
+    Return res
+End Sub
+
+Sub SendResponse (id As Object, result As Map)
+    Dim response As Map = CreateMap("jsonrpc": "2.0", "id": id, "result": result)
+    Dim s As String = response.As(JSON).ToCompactString
+    WriteDebug("SENDING: " & s)
+	Print(s & CRLF)
+End Sub
+
+Sub SendError (id As Object, code As Int, message As String)
+    Dim errMap As Map = CreateMap("code": code, "message": message)
+    Dim response As Map = CreateMap("jsonrpc": "2.0", "id": id, "error": errMap)
+    Dim s As String = response.As(JSON).ToCompactString
+	Print(s & CRLF)
+End Sub
+
+Sub Print (Message As String)
+    Dim b() As Byte = Message.GetBytes("UTF8")
+    out.WriteBytes(b, 0, b.Length)
+    out.Flush
+End Sub

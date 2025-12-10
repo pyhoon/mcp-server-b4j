@@ -1,0 +1,15 @@
+{
+  "preferences": {
+    "menuBarEnabled": true,
+    "legacyQuickEntryEnabled": false
+  },
+  "mcpServers": {
+    "b4j-inventory": {
+      "command": "C:\\Java\\jdk-19.0.2\\bin\\java",
+      "args": [
+        "-jar",
+        "C:\\B4X\\Development\\mcp-server\\Objects\\mcp_server.jar"
+      ]
+    }
+  }
+}
