@@ -16,6 +16,7 @@ Version=10.3
 	#MergeLibraries: True
 #End Region
 #AdditionalJar: sqlite-jdbc-3.7.2
+' Build the jar in release, kill the process and run in a new cmd
 #Macro: Title, Open Console, ide://run?file=%COMSPEC%&Args=/c&Args=start&Args=run.bat
 
 Sub Process_Globals
@@ -27,17 +28,22 @@ Sub Process_Globals
 End Sub
 
 Sub AppStart (Args() As String)
-    ' 1. Initialize Database
-    InitDatabase
+	' 1. Initialize Database
+	InitDatabase
     
-    ' 2. Initialize Standard Streams
-   	sys.InitializeStatic("java.lang.System")
+	' 2. Initialize Standard Streams
+	sys.InitializeStatic("java.lang.System")
 	in = sys.GetField("in")
 	out = sys.GetField("out")
-   	reader.Initialize(in)
+	reader.Initialize(in)
    
-    ' 3. Start the Listener Loop
-    Start
+	' Create a batch file
+	If File.Exists(File.DirApp, "run.bat") = False Then
+		File.WriteString(File.DirApp, "run.bat", GetSystemProperty("sun.boot.library.path", "C:\Java\jdk-19.0.2\bin") & "\java -jar mcp_server.jar")
+	End If
+   
+	' 3. Start the Listener Loop
+	Start
 End Sub
 
 ' Helper to log to a file instead of StdOut so we don't break the protocol
